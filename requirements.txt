@@ -1,4 +1,2 @@
-browser-use
-playwright
-python-dotenv
-pydantic
+browser-use==0.13.8
+langchain-google-genai
