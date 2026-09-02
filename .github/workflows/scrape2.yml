@@ -30,15 +30,12 @@ jobs:
           pip install -r requirements.txt
 
       - name: Install Chromium
-        run: playwright install --with-deps chromium
+        run: python -m playwright install --with-deps chromium
 
-      - name: Debug Playwright
-        run: python -c "import playwright; print(playwright.__version__)"
-        
       - name: Run scraper
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          CAREERS_URL: ${{ secrets.CAREERS_URL }}        
+          CAREERS_URL: ${{ secrets.CAREERS_URL }}
         run: python scrape_jobs.py
 
       - name: Commit updated jobs.json
