@@ -32,6 +32,9 @@ jobs:
       - name: Install Chromium
         run: python -m playwright install --with-deps chromium
 
+      - name: Increase /dev/shm size
+        run: sudo mount -t tmpfs -o size=512m tmpfs /dev/shm
+
       - name: Run scraper
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
