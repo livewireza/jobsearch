@@ -35,8 +35,7 @@ jobs:
       - name: Run scraper
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          CAREERS_URL: ${{ secrets.CAREERS_URL }}
-        working-directory: jobs
+          CAREERS_URL: ${{ secrets.CAREERS_URL }}        
         run: python scrape_jobs.py
 
       - name: Commit updated jobs.json
