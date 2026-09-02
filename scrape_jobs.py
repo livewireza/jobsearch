@@ -2,60 +2,89 @@ import os
 import json
 import asyncio
 from pathlib import Path
-from dotenv import load_dotenv
+
 from pydantic import BaseModel
-from browser_use import Agent, ChatGoogle
+from browser_use import Agent
+from browser_use.browser.profile import BrowserProfile
+from langchain_google_genai import ChatGoogleGenerativeAI
 
-load_dotenv()
-
-CAREERS_URL = os.environ["CAREERS_URL"]
 
 class Job(BaseModel):
     title: str
     location: str
     url: str
 
-class Jobs(BaseModel):
+
+class JobList(BaseModel):
     jobs: list[Job]
 
+
+CAREERS_URL = os.environ["CAREERS_URL"]
+
 TASK = f"""
-Open this careers website:
+Open the careers website at:
 
 {CAREERS_URL}
 
-1. Filter by the 'Product & Tech' category.
-2. If only 10 jobs are visible, click 'Load more' until at least 30 are visible.
-3. Extract exactly 30 unique jobs.
-4. Return ONLY JSON matching the schema.
+Instructions:
+1. Wait until the page is fully loaded.
+2. Filter to ONLY the 'Product & Tech' category.
+3. If only 10 jobs are visible, press 'Load more' repeatedly.
+4. Continue until at least 30 Product & Tech jobs are available.
+5. Extract exactly 30 unique jobs.
 
-Fields:
-- title
-- location
-- url
+Return ONLY JSON matching this schema:
+{{
+  "jobs":[
+    {{
+      "title":"",
+      "location":"",
+      "url":""
+    }}
+  ]
+}}
 """
 
+
 async def main():
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
+        google_api_key=os.environ["GEMINI_API_KEY"],
+        temperature=0,
+    )
+
+    browser_profile = BrowserProfile(
+        args=[
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+        ],
+    )
+
     agent = Agent(
         task=TASK,
-        llm=ChatGoogle(model="gemini-2.5-flash"),
-        output_model_schema=Jobs,
-        use_vision=True,
+        llm=llm,
+        output_model_schema=JobList,
+        browser_profile=browser_profile,
     )
 
-    result: Jobs = await agent.run()
+    result = await agent.run()
 
-    output = {
-        "source": "career-site",
-        "count": len(result.jobs),
-        "jobs": [j.model_dump() for j in result.jobs]
-    }
+    output_dir = Path("data")
+    output_dir.mkdir(exist_ok=True)
 
-    Path("jobs.json").write_text(
-        json.dumps(output, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    output_file = output_dir / "jobs.json"
 
-    print(f"Saved {len(result.jobs)} jobs to jobs.json")
+    with output_file.open("w", encoding="utf-8") as f:
+        json.dump(
+            result.model_dump(),
+            f,
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    print(f"Saved {len(result.jobs)} jobs to {output_file}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
