@@ -4,7 +4,6 @@ import asyncio
 from pathlib import Path
 
 from pydantic import BaseModel
-from playwright.async_api import async_playwright
 from browser_use import Agent
 from browser_use.browser.profile import BrowserProfile
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -46,8 +45,6 @@ Return ONLY JSON matching this schema:
 }}
 """
 
-CDP_PORT = 9222
-
 
 async def main():
     llm = ChatGoogleGenerativeAI(
@@ -56,31 +53,23 @@ async def main():
         temperature=0,
     )
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                f"--remote-debugging-port={CDP_PORT}",
-            ],
-        )
+    browser_profile = BrowserProfile(
+        headless=True,
+        extra_chromium_args=[
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+        ],
+    )
 
-        browser_profile = BrowserProfile(
-            cdp_url=f"http://localhost:{CDP_PORT}",
-        )
+    agent = Agent(
+        task=TASK,
+        llm=llm,
+        output_model_schema=JobList,
+        browser_profile=browser_profile,
+    )
 
-        agent = Agent(
-            task=TASK,
-            llm=llm,
-            output_model_schema=JobList,
-            browser_profile=browser_profile,
-        )
-
-        result = await agent.run()
-
-        await browser.close()
+    result = await agent.run()
 
     output_dir = Path("data")
     output_dir.mkdir(exist_ok=True)
