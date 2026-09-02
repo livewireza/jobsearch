@@ -32,6 +32,9 @@ jobs:
       - name: Install Chromium
         run: playwright install --with-deps chromium
 
+      - name: Debug Playwright
+        run: python -c "import playwright; print(playwright.__version__)"
+        
       - name: Run scraper
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
