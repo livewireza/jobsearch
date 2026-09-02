@@ -54,7 +54,8 @@ async def main():
     )
 
     browser_profile = BrowserProfile(
-        args=[
+        headless=True,
+        extra_chromium_args=[
             "--no-sandbox",
             "--disable-dev-shm-usage",
             "--disable-gpu",
