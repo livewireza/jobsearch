@@ -33,6 +33,7 @@ jobs:
       - name: Run scraper
         env:
           CAREERS_URL: ${{ vars.CAREERS_URL }}
+          WIDGETS_URL: ${{ vars.WIDGETS_URL }}
           MAILGUN_API_KEY: ${{ secrets.MAILGUN_API_KEY }}
           MAILGUN_DOMAIN: ${{ secrets.MAILGUN_DOMAIN }}
           MAILGUN_FROM: ${{ secrets.MAILGUN_FROM }}
@@ -61,15 +62,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          #git add data/jobs.json
-
           git add data/jobs.json
-          git commit --allow-empty -m "Update jobs data"
-          git push
 
-          #if git diff --cached --quiet; then
-          #  echo "No changes to jobs.json"
-          #else
-          #  git commit -m "Update jobs data"
-          #  git push
-          #fi
+          if git diff --cached --quiet; then
+            echo "No changes to jobs.json"
+          else
+            git commit -m "Update jobs data"
+            git push
+          fi
