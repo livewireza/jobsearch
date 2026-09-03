@@ -160,66 +160,10 @@ async function main(): Promise<void> {
 
     /*
      * ------------------------------------------------------------
-     * 3. Look for Product & Tech
+     * 3. Debugging
      * ------------------------------------------------------------
      */
 
-    console.log(
-      "Looking for Product & Tech filter..."
-    );
-
-    const productTechPatterns = [
-      /Product\s*&\s*Tech/i,
-      /Product\s+and\s+Tech/i,
-      /Product.*Tech/i,
-    ];
-
-    let filterClicked = false;
-
-    for (const pattern of productTechPatterns) {
-      try {
-        const candidates = page.getByText(pattern);
-
-        const count = await candidates.count();
-
-        console.log(
-          `Found ${count} candidates for ${pattern}`
-        );
-
-        for (let i = 0; i < count; i++) {
-          const candidate = candidates.nth(i);
-
-          if (
-            await candidate.isVisible({
-              timeout: 1_000,
-            })
-          ) {
-            console.log(
-              "Clicking Product & Tech filter..."
-            );
-
-            await candidate.scrollIntoViewIfNeeded();
-
-            await candidate.click();
-
-            filterClicked = true;
-
-            break;
-          }
-        }
-
-        if (filterClicked) {
-          break;
-        }
-      } catch {
-        // Try next pattern.
-      }
-    }
-
-    if (!filterClicked) {
-      console.log(
-        "WARNING: Could not find Product & Tech filter."
-      );
 
       /*
        * Save useful debugging information.
