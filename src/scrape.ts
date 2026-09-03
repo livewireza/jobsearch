@@ -3,6 +3,10 @@ import fs from "fs/promises";
 import path from "path";
 
 const CAREERS_URL = process.env.CAREERS_URL;
+const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY;
+const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN;
+const MAILGUN_FROM = process.env.MAILGUN_FROM;
+const MAILGUN_TO = process.env.MAILGUN_TO;
 
 if (!CAREERS_URL) {
   throw new Error("CAREERS_URL environment variable is not set");
@@ -151,6 +155,135 @@ async function saveJson(
     filename,
     JSON.stringify(data, null, 2),
     "utf8"
+  );
+}
+
+function jobsChanged(prev: Job[], next: Job[]): boolean {
+  const prevUrls = new Set(prev.map((j) => j.url));
+  const nextUrls = new Set(next.map((j) => j.url));
+
+  if (prevUrls.size !== nextUrls.size) {
+    return true;
+  }
+
+  for (const url of nextUrls) {
+    if (!prevUrls.has(url)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function formatEmailBody(
+  current: Job[],
+  previous: Job[]
+): string {
+  const prevUrls = new Set(previous.map((j) => j.url));
+  const nextUrls = new Set(current.map((j) => j.url));
+
+  const added = current.filter((j) => !prevUrls.has(j.url));
+  const removed = previous.filter(
+    (j) => !nextUrls.has(j.url)
+  );
+
+  const lines: string[] = [];
+
+  if (added.length > 0) {
+    lines.push(`NEW (${added.length}):`);
+
+    for (const j of added) {
+      lines.push(`  + ${j.title}`);
+      lines.push(`    ${j.url}`);
+
+      if (j.location) {
+        lines.push(`    ${j.location}`);
+      }
+    }
+
+    lines.push("");
+  }
+
+  if (removed.length > 0) {
+    lines.push(`REMOVED (${removed.length}):`);
+
+    for (const j of removed) {
+      lines.push(`  - ${j.title}`);
+      lines.push(`    ${j.url}`);
+    }
+
+    lines.push("");
+  }
+
+  lines.push(`ALL CURRENT LISTINGS (${current.length}):`);
+  lines.push("");
+
+  for (const [i, j] of current.entries()) {
+    lines.push(`${i + 1}. ${j.title}`);
+    lines.push(`   ${j.url}`);
+
+    if (j.location) {
+      lines.push(`   ${j.location}`);
+    }
+
+    if (j.description) {
+      lines.push(`   ${j.description}`);
+    }
+
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+async function sendEmail(
+  subject: string,
+  text: string
+): Promise<void> {
+  if (
+    !MAILGUN_API_KEY ||
+    !MAILGUN_DOMAIN ||
+    !MAILGUN_FROM ||
+    !MAILGUN_TO
+  ) {
+    console.log(
+      "Mailgun env vars not set — skipping email."
+    );
+
+    return;
+  }
+
+  const url = `https://api.mailgun.net/v3/${MAILGUN_DOMAIN}/messages`;
+
+  const body = new URLSearchParams({
+    from: MAILGUN_FROM,
+    to: MAILGUN_TO,
+    subject,
+    text,
+  });
+
+  const credentials = btoa(`api:${MAILGUN_API_KEY}`);
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      authorization: `Basic ${credentials}`,
+      "content-type":
+        "application/x-www-form-urlencoded",
+    },
+    body: body.toString(),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+
+    throw new Error(
+      `Mailgun request failed: HTTP ${response.status} — ${detail}`
+    );
+  }
+
+  console.log(
+    `Email sent to ${MAILGUN_TO} (subject: "${subject}").`
   );
 }
 
@@ -367,13 +500,36 @@ for (const [index, job] of finalJobs.entries()) {
   }
 }
 
+console.log("");
+console.log(`Found ${finalJobs.length} jobs.`);
+
+if (finalJobs.length === 0) {
+  throw new Error(
+    "/widgets returned no job records. " +
+    "Check screenshots/widgets-debug.json."
+  );
+}
+
+/*
+ * Load previous results to detect changes before overwriting.
+ */
+let previousJobs: Job[] = [];
+
+try {
+  const raw = await fs.readFile(
+    path.join(DATA_DIR, "jobs.json"),
+    "utf8"
+  );
+
+  previousJobs = JSON.parse(raw) as Job[];
+} catch {
+  // First run or file missing — treat everything as new.
+}
+
 await saveJson(
   path.join(DATA_DIR, "jobs.json"),
   finalJobs
 );
-
-console.log("");
-console.log(`Found ${finalJobs.length} jobs.`);
 
 if (finalJobs.length < 30) {
   console.warn(
@@ -381,10 +537,23 @@ if (finalJobs.length < 30) {
   );
 }
 
-if (finalJobs.length === 0) {
-  throw new Error(
-    "/widgets returned no job records. " +
-    "Check screenshots/widgets-debug.json."
+/*
+ * Email on changes only.
+ */
+if (jobsChanged(previousJobs, finalJobs)) {
+  console.log(
+    "\nChanges detected. Sending email..."
+  );
+
+  const emailBody = formatEmailBody(
+    finalJobs,
+    previousJobs
+  );
+
+  await sendEmail("Job listings", emailBody);
+} else {
+  console.log(
+    "\nNo changes since last run. Email not sent."
   );
 }
 
