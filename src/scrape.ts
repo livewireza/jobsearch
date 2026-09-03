@@ -49,8 +49,11 @@ type Job = {
   description?: string;
 };
 
-const WIDGETS_URL =
-  "https://careers.justeattakeaway.com/widgets";
+const WIDGETS_URL = process.env.WIDGETS_URL;
+
+if (!WIDGETS_URL) {
+  throw new Error("WIDGETS_URL environment variable is not set");
+}
 
 /*
  * Canonical search body that returns Tech & Product jobs.
