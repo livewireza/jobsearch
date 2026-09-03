@@ -1,4 +1,4 @@
-import { chromium, Request, Response } from "playwright";
+import { chromium, type Cookie, Request } from "playwright";
 import fs from "fs/promises";
 import path from "path";
 
@@ -27,7 +27,6 @@ type WidgetsJob = {
 
 type WidgetsResponseBody = {
   refineSearch?: {
-    status?: number;
     hits?: number;
     totalHits?: number;
     data?: {
@@ -44,18 +43,36 @@ type Job = {
   description?: string;
 };
 
-function isWidgetsUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
+const WIDGETS_URL =
+  "https://careers.justeattakeaway.com/widgets";
 
-    return (
-      parsed.hostname === "careers.justeattakeaway.com" &&
-      parsed.pathname === "/widgets"
-    );
-  } catch {
-    return false;
-  }
-}
+/*
+ * Canonical search body that returns Tech & Product jobs.
+ * Captured from a real browser session (see request.txt).
+ */
+const SEARCH_BODY = {
+  sortBy: "",
+  subsearch: "",
+  from: 0,
+  jobs: true,
+  counts: true,
+  all_fields: ["category", "country", "city", "type"],
+  pageName: "search-results",
+  size: 50,
+  clearAll: false,
+  jdsource: "facets",
+  isSliderEnable: false,
+  pageId: "page775",
+  siteType: "external",
+  keywords: "",
+  global: true,
+  selected_fields: { category: ["Tech & Product"] },
+  lang: "en_global",
+  deviceType: "desktop",
+  country: "global",
+  refNum: "TAKEGLOBAL",
+  ddoKey: "refineSearch",
+};
 
 function buildJobUrl(
   jobId: string,
@@ -92,7 +109,9 @@ function extractJobs(
       job.applyUrl = j.applyUrl;
     }
 
-    const locationParts = [j.city, j.state, j.country].filter(Boolean);
+    const locationParts = [j.city, j.state, j.country].filter(
+      Boolean
+    );
 
     if (locationParts.length > 0) {
       job.location = locationParts.join(", ");
@@ -135,6 +154,60 @@ async function saveJson(
   );
 }
 
+/*
+ * Extract the CSRF token from the PLAY_SESSION cookie.
+ * The cookie value is a signed JWT; the payload contains csrfToken.
+ */
+function extractCsrfFromSession(
+  sessionCookieValue: string
+): string | null {
+  try {
+    const parts = sessionCookieValue.split(".");
+
+    if (parts.length < 2) {
+      return null;
+    }
+
+    const b64 = parts[1]
+      .replace(/-/g, "+")
+      .replace(/_/g, "/");
+
+    const payload = JSON.parse(atob(b64)) as {
+      data?: { csrfToken?: string };
+    };
+
+    return payload?.data?.csrfToken ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchJobs(
+  csrfToken: string,
+  from: number
+): Promise<WidgetsResponseBody> {
+  const response = await fetch(WIDGETS_URL, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "x-csrf-token": csrfToken,
+      referer: CAREERS_URL ?? "",
+    },
+    body: JSON.stringify({ ...SEARCH_BODY, from }),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `POST /widgets failed: HTTP ${response.status}`
+    );
+  }
+
+  return (await response.json()) as WidgetsResponseBody;
+}
+
+// ===
+
 const browser = await chromium.launch({ headless: true });
 
 const context = await browser.newContext({
@@ -143,75 +216,24 @@ const context = await browser.newContext({
 
 const page = await context.newPage();
 
-let capturedRequestBody: Record<string, unknown> = {};
 let csrfToken: string | null = null;
-let widgetsUrl: string | null = null;
-
-const capturedJobs: WidgetsJob[] = [];
-let totalHits = 0;
 
 /*
- * Capture the /widgets POST request so we can replay it for pagination.
+ * Grab the CSRF token the moment any /widgets request fires.
  */
 page.on("request", (req: Request) => {
-  if (!isWidgetsUrl(req.url())) {
+  if (
+    csrfToken ||
+    !req.url().startsWith(WIDGETS_URL)
+  ) {
     return;
   }
 
-  widgetsUrl = req.url();
-  csrfToken = req.headers()["x-csrf-token"] ?? null;
+  csrfToken =
+    req.headers()["x-csrf-token"] ?? null;
 
-  try {
-    const raw = req.postData();
-
-    if (raw) {
-      capturedRequestBody = JSON.parse(raw) as Record<
-        string,
-        unknown
-      >;
-    }
-  } catch {
-    // ignore parse errors
-  }
-
-  console.log(
-    `\nWidgets request: ${req.url()}`
-  );
-  console.log(
-    `CSRF token: ${csrfToken ? "present" : "missing"}`
-  );
-});
-
-/*
- * Capture the /widgets POST response.
- */
-page.on("response", async (res: Response) => {
-  if (!isWidgetsUrl(res.url())) {
-    return;
-  }
-
-  console.log(
-    `\nWidgets response: HTTP ${res.status()}`
-  );
-
-  try {
-    const json =
-      (await res.json()) as WidgetsResponseBody;
-
-    const apiJobs = json.refineSearch?.data?.jobs ?? [];
-
-    totalHits = json.refineSearch?.totalHits ?? apiJobs.length;
-
-    capturedJobs.push(...apiJobs);
-
-    console.log(
-      `  jobs in page: ${apiJobs.length}, totalHits: ${totalHits}`
-    );
-  } catch (err) {
-    console.error(
-      "Could not parse /widgets response:",
-      err
-    );
+  if (csrfToken) {
+    console.log("CSRF token captured from /widgets request.");
   }
 });
 
@@ -235,26 +257,34 @@ await page.screenshot({
   fullPage: true,
 });
 
-console.log("Waiting for job widget...");
+console.log("Waiting for CSRF token...");
 
 await page.waitForTimeout(10_000);
 
-await page.screenshot({
-  path: path.join(SCREENSHOT_DIR, "02-after-js.png"),
-  fullPage: true,
-});
-
-if (!widgetsUrl) {
+/*
+ * Fallback: parse the token from the session cookie directly.
+ */
+if (!csrfToken) {
   console.log(
-    "No /widgets request seen yet. Waiting another 10 seconds..."
+    "No /widgets request seen. Extracting CSRF token from session cookie..."
   );
 
-  await page.waitForTimeout(10_000);
+  const cookies = await context.cookies();
+  const session = cookies.find(
+    (c: Cookie) => c.name === "PLAY_SESSION"
+  );
+
+  if (session) {
+    csrfToken = extractCsrfFromSession(session.value);
+  }
 }
 
-if (!widgetsUrl || Object.keys(capturedRequestBody).length === 0) {
+if (!csrfToken) {
   await page.screenshot({
-    path: path.join(SCREENSHOT_DIR, "99-no-widgets.png"),
+    path: path.join(
+      SCREENSHOT_DIR,
+      "99-no-csrf.png"
+    ),
     fullPage: true,
   });
 
@@ -267,81 +297,62 @@ if (!widgetsUrl || Object.keys(capturedRequestBody).length === 0) {
   await browser.close();
 
   throw new Error(
-    "No /widgets POST request was captured. " +
-    "Check screenshots/ and page.html for diagnostics."
+    "Could not obtain a CSRF token. Check screenshots/ and page.html."
   );
 }
 
+await browser.close();
+
 /*
- * Paginate with direct requests until we have all jobs.
+ * Fetch all Tech & Product jobs via direct API calls.
  */
-while (capturedJobs.length < totalHits && csrfToken) {
-  const from = capturedJobs.length;
+console.log(
+  "\nFetching Tech & Product jobs from /widgets..."
+);
 
-  console.log(
-    `\nFetching more jobs (from=${from}, have ${capturedJobs.length}/${totalHits})...`
-  );
+let allJobs: Job[] = [];
+let totalHits = 0;
+let from = 0;
 
-  const requestBody = {
-    ...capturedRequestBody,
-    from,
-    size: 50,
-  };
-
-  const response = await page.request.post(widgetsUrl, {
-    headers: {
-      accept: "application/json",
-      "content-type": "application/json",
-      "x-csrf-token": csrfToken,
-      referer: CAREERS_URL,
-    },
-    data: requestBody,
-  });
-
-  console.log(`  HTTP ${response.status()}`);
-
-  if (!response.ok()) {
-    console.warn(
-      `  Request failed: ${(await response.text()).slice(0, 500)}`
+do {
+  if (from > 0) {
+    console.log(
+      `  Fetching next page (from=${from}, have ${allJobs.length}/${totalHits})...`
     );
-
-    break;
   }
 
-  const json =
-    (await response.json()) as WidgetsResponseBody;
+  const body = await fetchJobs(csrfToken, from);
 
-  const pageJobs = json.refineSearch?.data?.jobs ?? [];
+  const pageJobs = body.refineSearch?.data?.jobs ?? [];
+
+  totalHits = body.refineSearch?.totalHits ?? 0;
+
+  console.log(
+    `  Page from=${from}: ${pageJobs.length} jobs (totalHits=${totalHits})`
+  );
 
   if (pageJobs.length === 0) {
     break;
   }
 
-  capturedJobs.push(...pageJobs);
+  allJobs = dedupeJobs([
+    ...allJobs,
+    ...extractJobs(pageJobs, CAREERS_URL),
+  ]);
 
-  console.log(
-    `  Got ${pageJobs.length} more (total now: ${capturedJobs.length})`
-  );
-}
-
-let jobs = dedupeJobs(
-  extractJobs(capturedJobs, CAREERS_URL)
-);
-
-console.log(`\nUnique jobs extracted: ${jobs.length}`);
+  from += pageJobs.length;
+} while (allJobs.length < totalHits);
 
 await saveJson(
   path.join(SCREENSHOT_DIR, "widgets-debug.json"),
   {
     careersUrl: CAREERS_URL,
-    widgetsUrl,
     totalHits,
-    capturedJobCount: capturedJobs.length,
-    extractedJobs: jobs,
+    extractedJobs: allJobs,
   }
 );
 
-const finalJobs = jobs.slice(0, 30);
+const finalJobs = allJobs.slice(0, 30);
 
 console.log("\n========================================");
 console.log("FINAL RESULTS");
@@ -361,11 +372,6 @@ await saveJson(
   finalJobs
 );
 
-await page.screenshot({
-  path: path.join(SCREENSHOT_DIR, "99-finished.png"),
-  fullPage: true,
-});
-
 console.log("");
 console.log(`Found ${finalJobs.length} jobs.`);
 
@@ -376,14 +382,10 @@ if (finalJobs.length < 30) {
 }
 
 if (finalJobs.length === 0) {
-  await browser.close();
-
   throw new Error(
-    "/widgets API responded but no job records were extracted. " +
+    "/widgets returned no job records. " +
     "Check screenshots/widgets-debug.json."
   );
 }
-
-await browser.close();
 
 console.log("Scrape completed successfully.");
