@@ -1,4 +1,4 @@
-import { chromium, Page, Response } from "playwright";
+import { chromium, Request, Response } from "playwright";
 import fs from "fs/promises";
 import path from "path";
 
@@ -10,115 +10,96 @@ if (!CAREERS_URL) {
 
 const DATA_DIR = path.resolve("data");
 const SCREENSHOT_DIR = path.resolve("screenshots");
-const FLOCKLER_DIR = path.join(SCREENSHOT_DIR, "flockler-responses");
 
 await fs.mkdir(DATA_DIR, { recursive: true });
 await fs.mkdir(SCREENSHOT_DIR, { recursive: true });
-await fs.mkdir(FLOCKLER_DIR, { recursive: true });
 
-type FlocklerPost = {
-  id?: string | number;
+type WidgetsJob = {
+  jobId?: string;
   title?: string;
-  text?: string;
-  textPlain?: string;
-  sourceUrl?: string;
-  ctaLink?: {
-    url?: string;
-    title?: string;
-  };
+  applyUrl?: string;
+  city?: string;
+  country?: string;
+  state?: string;
+  descriptionTeaser?: string;
   [key: string]: unknown;
 };
 
-type FlocklerResponse = {
-  posts?: FlocklerPost[];
-  pagination?: {
-    newer?: string | null;
-    older?: string | null;
-    [key: string]: unknown;
+type WidgetsResponseBody = {
+  refineSearch?: {
+    status?: number;
+    hits?: number;
+    totalHits?: number;
+    data?: {
+      jobs?: WidgetsJob[];
+    };
   };
-  [key: string]: unknown;
 };
 
 type Job = {
   title: string;
   url: string;
-  sourceUrl?: string;
+  applyUrl?: string;
+  location?: string;
   description?: string;
 };
 
-function isFlocklerPostsUrl(url: string): boolean {
+function isWidgetsUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
 
     return (
-      parsed.hostname === "api.flockler.app" &&
-      parsed.pathname.includes("/v2/") &&
-      parsed.pathname.endsWith("/posts")
+      parsed.hostname === "careers.justeattakeaway.com" &&
+      parsed.pathname === "/widgets"
     );
   } catch {
     return false;
   }
 }
 
-function isLikelyJobUrl(url: string): boolean {
-  return (
-    /\/job\//i.test(url) ||
-    /\/jobs\//i.test(url) ||
-    /\/job\?/i.test(url) ||
-    /jobId=/i.test(url) ||
-    /jobid=/i.test(url)
-  );
+function buildJobUrl(
+  jobId: string,
+  title: string,
+  baseUrl: string
+): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  const origin = new URL(baseUrl).origin;
+
+  return `${origin}/global/en/job/${jobId}/${slug}`;
 }
 
-function normaliseUrl(url: string): string {
-  try {
-    return new URL(url, CAREERS_URL).href;
-  } catch {
-    return url;
-  }
-}
-
-function extractJobs(posts: FlocklerPost[]): Job[] {
+function extractJobs(
+  apiJobs: WidgetsJob[],
+  baseUrl: string
+): Job[] {
   const jobs: Job[] = [];
 
-  for (const post of posts) {
-    const title =
-      typeof post.title === "string"
-        ? post.title.trim()
-        : "";
-
-    if (!title) {
-      continue;
-    }
-
-    const possibleUrls = [
-      typeof post.ctaLink?.url === "string"
-        ? post.ctaLink.url
-        : "",
-      typeof post.sourceUrl === "string"
-        ? post.sourceUrl
-        : "",
-    ]
-      .filter(Boolean)
-      .map(normaliseUrl);
-
-    const jobUrl = possibleUrls.find(isLikelyJobUrl);
-
-    if (!jobUrl) {
+  for (const j of apiJobs) {
+    if (!j.title || !j.jobId) {
       continue;
     }
 
     const job: Job = {
-      title,
-      url: jobUrl,
+      title: j.title,
+      url: buildJobUrl(j.jobId, j.title, baseUrl),
     };
 
-    if (post.sourceUrl) {
-      job.sourceUrl = normaliseUrl(post.sourceUrl);
+    if (j.applyUrl) {
+      job.applyUrl = j.applyUrl;
     }
 
-    if (post.textPlain) {
-      job.description = post.textPlain.trim();
+    const locationParts = [j.city, j.state, j.country].filter(Boolean);
+
+    if (locationParts.length > 0) {
+      job.location = locationParts.join(", ");
+    }
+
+    if (j.descriptionTeaser) {
+      job.description = j.descriptionTeaser;
     }
 
     jobs.push(job);
@@ -129,20 +110,18 @@ function extractJobs(posts: FlocklerPost[]): Job[] {
 
 function dedupeJobs(jobs: Job[]): Job[] {
   const seen = new Set<string>();
-  const result: Job[] = [];
 
-  for (const job of jobs) {
-    const key = job.url || job.title;
+  return jobs.filter((j) => {
+    const key = j.url || j.title;
 
     if (seen.has(key)) {
-      continue;
+      return false;
     }
 
     seen.add(key);
-    result.push(job);
-  }
 
-  return result;
+    return true;
+  });
 }
 
 async function saveJson(
@@ -156,265 +135,85 @@ async function saveJson(
   );
 }
 
-async function inspectPage(page: Page): Promise<void> {
-  console.log("\n=== PAGE INSPECTION ===");
-
-  const headings = await page
-    .locator("h1,h2,h3,h4")
-    .allTextContents();
-
-  console.log("Headings:");
-
-  for (const heading of headings) {
-    const text = heading.trim();
-
-    if (text) {
-      console.log(`  ${text}`);
-    }
-  }
-
-  const buttons = await page
-    .locator("button")
-    .evaluateAll((elements) =>
-      elements.map((element) => ({
-        text: (element.textContent || "").trim(),
-        ariaLabel: element.getAttribute("aria-label"),
-        type: element.getAttribute("type"),
-        disabled: (element as HTMLButtonElement).disabled,
-      }))
-    );
-
-  console.log("\nButtons:");
-
-  for (const button of buttons) {
-    console.log(
-      `  text="${button.text}" aria="${button.ariaLabel}" disabled=${button.disabled}`
-    );
-  }
-
-  const links = await page
-    .locator("a")
-    .evaluateAll((elements) =>
-      elements.map((element) => ({
-        text: (element.textContent || "").trim(),
-        href: element.getAttribute("href"),
-      }))
-    );
-
-  console.log("\nJob-looking links:");
-
-  for (const link of links) {
-    if (!link.href) {
-      continue;
-    }
-
-    const url = normaliseUrl(link.href);
-
-    if (isLikelyJobUrl(url)) {
-      console.log(`  ${link.text} -> ${url}`);
-    }
-  }
-
-  console.log("========================\n");
-}
-
-async function requestFlockler(
-  page: Page,
-  originalUrl: string,
-  count: number
-): Promise<FlocklerResponse | null> {
-  try {
-    const url = new URL(originalUrl);
-
-    url.searchParams.set("count", String(count));
-
-    console.log("\n=== FLOCKLER DIRECT REQUEST ===");
-    console.log(url.href);
-
-    const response = await page.request.get(url.href, {
-      headers: {
-        accept: "application/json, text/plain, */*",
-      },
-    });
-
-    console.log(`HTTP ${response.status()}`);
-
-    if (!response.ok()) {
-      console.log(
-        `Request failed: ${(await response.text()).slice(0, 1000)}`
-      );
-
-      return null;
-    }
-
-    const json = (await response.json()) as FlocklerResponse;
-
-    await saveJson(
-      path.join(
-        FLOCKLER_DIR,
-        `count-${count}.json`
-      ),
-      {
-        url: url.href,
-        status: response.status(),
-        body: json,
-      }
-    );
-
-    return json;
-  } catch (error) {
-    console.error(
-      "Flockler direct request failed:",
-      error
-    );
-
-    return null;
-  }
-}
-
-async function requestOlderPage(
-  page: Page,
-  originalUrl: string,
-  cursor: string
-): Promise<FlocklerResponse | null> {
-  try {
-    const url = new URL(originalUrl);
-
-    url.searchParams.set(
-      "olderThanCursor",
-      cursor
-    );
-
-    url.searchParams.set("count", "30");
-
-    console.log("\n=== FLOCKLER OLDER PAGE ===");
-    console.log(url.href);
-
-    const response = await page.request.get(url.href, {
-      headers: {
-        accept: "application/json, text/plain, */*",
-      },
-    });
-
-    console.log(`HTTP ${response.status()}`);
-
-    if (!response.ok()) {
-      console.log(
-        `Request failed: ${(await response.text()).slice(0, 1000)}`
-      );
-
-      return null;
-    }
-
-    const json = (await response.json()) as FlocklerResponse;
-
-    return json;
-  } catch (error) {
-    console.error(
-      "Flockler older-page request failed:",
-      error
-    );
-
-    return null;
-  }
-}
-
-const browser = await chromium.launch({
-  headless: true,
-});
+const browser = await chromium.launch({ headless: true });
 
 const context = await browser.newContext({
-  viewport: {
-    width: 1440,
-    height: 1000,
-  },
+  viewport: { width: 1440, height: 1000 },
 });
 
 const page = await context.newPage();
 
-let firstFlocklerUrl: string | null = null;
+let capturedRequestBody: Record<string, unknown> = {};
+let csrfToken: string | null = null;
+let widgetsUrl: string | null = null;
 
-const capturedResponses: Array<{
-  url: string;
-  status: number;
-  body: FlocklerResponse;
-}> = [];
+const capturedJobs: WidgetsJob[] = [];
+let totalHits = 0;
 
 /*
- * Capture the actual Flockler job-widget response.
+ * Capture the /widgets POST request so we can replay it for pagination.
  */
-page.on(
-  "response",
-  async (response: Response) => {
-    const url = response.url();
-
-    if (!isFlocklerPostsUrl(url)) {
-      return;
-    }
-
-    console.log("\n================================");
-    console.log("FLOCKLER RESPONSE CAPTURED");
-    console.log("================================");
-    console.log(`Status: ${response.status()}`);
-    console.log(`URL: ${url}`);
-
-    if (!firstFlocklerUrl) {
-      firstFlocklerUrl = url;
-    }
-
-    try {
-      const json =
-        (await response.json()) as FlocklerResponse;
-
-      capturedResponses.push({
-        url,
-        status: response.status(),
-        body: json,
-      });
-
-      const index = capturedResponses.length;
-
-      await saveJson(
-        path.join(
-          FLOCKLER_DIR,
-          `response-${String(index).padStart(2, "0")}.json`
-        ),
-        {
-          url,
-          status: response.status(),
-          body: json,
-        }
-      );
-
-      const posts = Array.isArray(json.posts)
-        ? json.posts
-        : [];
-
-      console.log(`Posts: ${posts.length}`);
-
-      if (json.pagination) {
-        console.log(
-          `Older cursor: ${json.pagination.older ?? "none"}`
-        );
-
-        console.log(
-          `Newer cursor: ${json.pagination.newer ?? "none"}`
-        );
-      }
-
-      for (const post of posts) {
-        console.log(
-          `  ${post.title ?? "(no title)"}`
-        );
-      }
-    } catch (error) {
-      console.error(
-        "Could not parse Flockler JSON:",
-        error
-      );
-    }
+page.on("request", (req: Request) => {
+  if (!isWidgetsUrl(req.url())) {
+    return;
   }
-);
+
+  widgetsUrl = req.url();
+  csrfToken = req.headers()["x-csrf-token"] ?? null;
+
+  try {
+    const raw = req.postData();
+
+    if (raw) {
+      capturedRequestBody = JSON.parse(raw) as Record<
+        string,
+        unknown
+      >;
+    }
+  } catch {
+    // ignore parse errors
+  }
+
+  console.log(
+    `\nWidgets request: ${req.url()}`
+  );
+  console.log(
+    `CSRF token: ${csrfToken ? "present" : "missing"}`
+  );
+});
+
+/*
+ * Capture the /widgets POST response.
+ */
+page.on("response", async (res: Response) => {
+  if (!isWidgetsUrl(res.url())) {
+    return;
+  }
+
+  console.log(
+    `\nWidgets response: HTTP ${res.status()}`
+  );
+
+  try {
+    const json =
+      (await res.json()) as WidgetsResponseBody;
+
+    const apiJobs = json.refineSearch?.data?.jobs ?? [];
+
+    totalHits = json.refineSearch?.totalHits ?? apiJobs.length;
+
+    capturedJobs.push(...apiJobs);
+
+    console.log(
+      `  jobs in page: ${apiJobs.length}, totalHits: ${totalHits}`
+    );
+  } catch (err) {
+    console.error(
+      "Could not parse /widgets response:",
+      err
+    );
+  }
+});
 
 console.log("========================================");
 console.log("JET TECH & PRODUCT SCRAPER");
@@ -432,10 +231,7 @@ await page.goto(CAREERS_URL, {
 console.log(`Title: ${await page.title()}`);
 
 await page.screenshot({
-  path: path.join(
-    SCREENSHOT_DIR,
-    "01-home.png"
-  ),
+  path: path.join(SCREENSHOT_DIR, "01-home.png"),
   fullPage: true,
 });
 
@@ -444,154 +240,103 @@ console.log("Waiting for job widget...");
 await page.waitForTimeout(10_000);
 
 await page.screenshot({
-  path: path.join(
-    SCREENSHOT_DIR,
-    "02-after-js.png"
-  ),
+  path: path.join(SCREENSHOT_DIR, "02-after-js.png"),
   fullPage: true,
 });
 
-await fs.writeFile(
-  path.join(SCREENSHOT_DIR, "page.html"),
-  await page.content(),
-  "utf8"
-);
-
-await inspectPage(page);
-
-/*
- * Give the widget another chance to load.
- */
-if (!firstFlocklerUrl) {
+if (!widgetsUrl) {
   console.log(
-    "Flockler request not seen yet. Waiting another 10 seconds..."
+    "No /widgets request seen yet. Waiting another 10 seconds..."
   );
 
   await page.waitForTimeout(10_000);
 }
 
-if (!firstFlocklerUrl) {
+if (!widgetsUrl || Object.keys(capturedRequestBody).length === 0) {
   await page.screenshot({
-    path: path.join(
-      SCREENSHOT_DIR,
-      "99-no-flockler.png"
-    ),
+    path: path.join(SCREENSHOT_DIR, "99-no-widgets.png"),
     fullPage: true,
   });
+
+  await fs.writeFile(
+    path.join(SCREENSHOT_DIR, "page.html"),
+    await page.content(),
+    "utf8"
+  );
 
   await browser.close();
 
   throw new Error(
-    "No Flockler /posts request was captured."
-  );
-}
-
-console.log("\n========================================");
-console.log("INITIAL FLOCKLER URL");
-console.log("========================================");
-console.log(firstFlocklerUrl);
-
-/*
- * Extract jobs from the normal browser response.
- */
-let jobs: Job[] = [];
-
-for (const captured of capturedResponses) {
-  if (!Array.isArray(captured.body.posts)) {
-    continue;
-  }
-
-  jobs.push(
-    ...extractJobs(captured.body.posts)
-  );
-}
-
-jobs = dedupeJobs(jobs);
-
-console.log(
-  `\nJobs from browser response: ${jobs.length}`
-);
-
-/*
- * Try the same request with count=30.
- */
-const count30 = await requestFlockler(
-  page,
-  firstFlocklerUrl,
-  30
-);
-
-if (count30 && Array.isArray(count30.posts)) {
-  console.log(
-    `count=30 returned ${count30.posts.length} posts`
-  );
-
-  jobs = dedupeJobs([
-    ...jobs,
-    ...extractJobs(count30.posts),
-  ]);
-
-  console.log(
-    `Unique jobs after count=30: ${jobs.length}`
+    "No /widgets POST request was captured. " +
+    "Check screenshots/ and page.html for diagnostics."
   );
 }
 
 /*
- * Follow older cursor if necessary.
+ * Paginate with direct requests until we have all jobs.
  */
-let cursor =
-  count30?.pagination?.older ?? null;
-
-let cursorPages = 0;
-
-while (
-  jobs.length < 30 &&
-  cursor &&
-  cursorPages < 10
-) {
-  cursorPages++;
+while (capturedJobs.length < totalHits && csrfToken) {
+  const from = capturedJobs.length;
 
   console.log(
-    `Following older cursor (${cursorPages})...`
+    `\nFetching more jobs (from=${from}, have ${capturedJobs.length}/${totalHits})...`
   );
 
-  const older = await requestOlderPage(
-    page,
-    firstFlocklerUrl,
-    cursor
-  );
+  const requestBody = {
+    ...capturedRequestBody,
+    from,
+    size: 50,
+  };
 
-  if (!older) {
+  const response = await page.request.post(widgetsUrl, {
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "x-csrf-token": csrfToken,
+      referer: CAREERS_URL,
+    },
+    data: requestBody,
+  });
+
+  console.log(`  HTTP ${response.status()}`);
+
+  if (!response.ok()) {
+    console.warn(
+      `  Request failed: ${(await response.text()).slice(0, 500)}`
+    );
+
     break;
   }
 
-  if (Array.isArray(older.posts)) {
-    jobs = dedupeJobs([
-      ...jobs,
-      ...extractJobs(older.posts),
-    ]);
+  const json =
+    (await response.json()) as WidgetsResponseBody;
+
+  const pageJobs = json.refineSearch?.data?.jobs ?? [];
+
+  if (pageJobs.length === 0) {
+    break;
   }
 
-  console.log(
-    `Jobs after cursor page: ${jobs.length}`
-  );
+  capturedJobs.push(...pageJobs);
 
-  cursor =
-    older.pagination?.older ?? null;
+  console.log(
+    `  Got ${pageJobs.length} more (total now: ${capturedJobs.length})`
+  );
 }
 
-/*
- * Save raw diagnostic data.
- */
+let jobs = dedupeJobs(
+  extractJobs(capturedJobs, CAREERS_URL)
+);
+
+console.log(`\nUnique jobs extracted: ${jobs.length}`);
+
 await saveJson(
-  path.join(
-    SCREENSHOT_DIR,
-    "flockler-debug.json"
-  ),
+  path.join(SCREENSHOT_DIR, "widgets-debug.json"),
   {
     careersUrl: CAREERS_URL,
-    firstFlocklerUrl,
-    capturedResponses,
+    widgetsUrl,
+    totalHits,
+    capturedJobCount: capturedJobs.length,
     extractedJobs: jobs,
   }
 );
@@ -603,10 +348,12 @@ console.log("FINAL RESULTS");
 console.log("========================================");
 
 for (const [index, job] of finalJobs.entries()) {
-  console.log(
-    `${index + 1}. ${job.title}`
-  );
+  console.log(`${index + 1}. ${job.title}`);
   console.log(`   ${job.url}`);
+
+  if (job.location) {
+    console.log(`   ${job.location}`);
+  }
 }
 
 await saveJson(
@@ -615,17 +362,12 @@ await saveJson(
 );
 
 await page.screenshot({
-  path: path.join(
-    SCREENSHOT_DIR,
-    "99-finished.png"
-  ),
+  path: path.join(SCREENSHOT_DIR, "99-finished.png"),
   fullPage: true,
 });
 
 console.log("");
-console.log(
-  `Found ${finalJobs.length} jobs.`
-);
+console.log(`Found ${finalJobs.length} jobs.`);
 
 if (finalJobs.length < 30) {
   console.warn(
@@ -637,8 +379,8 @@ if (finalJobs.length === 0) {
   await browser.close();
 
   throw new Error(
-    "Flockler responded, but no recognisable job records were found. " +
-    "Check screenshots/flockler-responses/ and flockler-debug.json."
+    "/widgets API responded but no job records were extracted. " +
+    "Check screenshots/widgets-debug.json."
   );
 }
 
