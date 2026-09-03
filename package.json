@@ -3,10 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "scrape": "playwright test"
+    "scrape": "tsx src/scrape.ts"
   },
-  "devDependencies": {
+  "dependencies": {
     "@playwright/test": "^1.55.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.9.2"
   }
 }
