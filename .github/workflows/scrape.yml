@@ -37,6 +37,7 @@ jobs:
           MAILGUN_DOMAIN: ${{ secrets.MAILGUN_DOMAIN }}
           MAILGUN_FROM: ${{ secrets.MAILGUN_FROM }}
           MAILGUN_TO: ${{ secrets.MAILGUN_TO }}
+          MAILGUN_REGION: ${{ vars.MAILGUN_REGION }}
         run: npm run scrape
 
       - name: Upload screenshots
