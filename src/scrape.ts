@@ -1,4 +1,3 @@
-```ts
 import { chromium, Page, Response } from "playwright";
 import fs from "fs/promises";
 import path from "path";
@@ -646,4 +645,3 @@ if (finalJobs.length === 0) {
 await browser.close();
 
 console.log("Scrape completed successfully.");
-```
