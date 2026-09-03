@@ -33,6 +33,10 @@ jobs:
       - name: Run scraper
         env:
           CAREERS_URL: ${{ vars.CAREERS_URL }}
+          MAILGUN_API_KEY: ${{ secrets.MAILGUN_API_KEY }}
+          MAILGUN_DOMAIN: ${{ secrets.MAILGUN_DOMAIN }}
+          MAILGUN_FROM: ${{ secrets.MAILGUN_FROM }}
+          MAILGUN_TO: ${{ secrets.MAILGUN_TO }}
         run: npm run scrape
 
       - name: Upload screenshots
