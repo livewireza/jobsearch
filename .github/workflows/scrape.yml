@@ -62,9 +62,13 @@ jobs:
 
           git add data/jobs.json
 
-          if git diff --cached --quiet; then
-            echo "No changes to jobs.json"
-          else
-            git commit -m "Update jobs data"
-            git push
-          fi
+          git add data/jobs.json
+          git commit --allow-empty -m "Update jobs data"
+          git push
+
+          #if git diff --cached --quiet; then
+          #  echo "No changes to jobs.json"
+          #else
+          #  git commit -m "Update jobs data"
+          #  git push
+          #fi
