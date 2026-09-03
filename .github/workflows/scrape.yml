@@ -34,14 +34,14 @@ jobs:
 
       - name: Upload screenshots
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: screenshots
           path: screenshots/
 
       - name: Upload trace
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: playwright-trace
           path: test-results/
