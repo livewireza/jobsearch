@@ -3,10 +3,12 @@ import fs from "fs/promises";
 import path from "path";
 
 const CAREERS_URL = process.env.CAREERS_URL;
-const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY;
-const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN;
-const MAILGUN_FROM = process.env.MAILGUN_FROM;
-const MAILGUN_TO = process.env.MAILGUN_TO;
+const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY?.trim();
+const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN?.trim();
+const MAILGUN_FROM = process.env.MAILGUN_FROM?.trim();
+const MAILGUN_TO = process.env.MAILGUN_TO?.trim();
+// Set to "eu" for accounts on the Mailgun EU region.
+const MAILGUN_REGION = (process.env.MAILGUN_REGION?.trim() ?? "us").toLowerCase();
 
 if (!CAREERS_URL) {
   throw new Error("CAREERS_URL environment variable is not set");
@@ -253,7 +255,14 @@ async function sendEmail(
     return;
   }
 
-  const url = `https://api.mailgun.net/v3/${MAILGUN_DOMAIN}/messages`;
+  const host =
+    MAILGUN_REGION === "eu"
+      ? "api.eu.mailgun.net"
+      : "api.mailgun.net";
+
+  const url = `https://${host}/v3/${MAILGUN_DOMAIN}/messages`;
+
+  console.log(`  Mailgun endpoint: ${url}`);
 
   const body = new URLSearchParams({
     from: MAILGUN_FROM,
@@ -262,7 +271,9 @@ async function sendEmail(
     text,
   });
 
-  const credentials = btoa(`api:${MAILGUN_API_KEY}`);
+  const credentials = btoa(
+    `api:${MAILGUN_API_KEY}`
+  );
 
   const response = await fetch(url, {
     method: "POST",
