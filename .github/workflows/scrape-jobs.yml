@@ -41,7 +41,7 @@ jobs:
 
       - name: Upload trace
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: playwright-trace
           path: test-results/
