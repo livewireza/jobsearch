@@ -1,0 +1,12 @@
+{
+  "name": "phenom-job-scraper",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "scrape": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "typescript": "^5.9.2"
+  }
+}
