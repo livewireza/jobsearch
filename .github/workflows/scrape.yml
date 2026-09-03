@@ -64,7 +64,7 @@ jobs:
 
           git add data/jobs.json
 
-          if git diff --cached --quiet; then
+          if ! git diff --cached --quiet; then
             echo "No changes to jobs.json"
           else
             git commit -m "Update jobs data"
