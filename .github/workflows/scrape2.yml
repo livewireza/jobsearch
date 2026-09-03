@@ -3,7 +3,7 @@ name: Scrape Careers Jobs
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 7 * * *" # Daily 07:00 UTC
+    #- cron: "0 7 * * *" # Daily 07:00 UTC
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
